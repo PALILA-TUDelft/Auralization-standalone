@@ -22,8 +22,6 @@ A simplified workflow of the framework is shown below.
 
 ![Workflow of the auralization framework](docs/images/tool_workflow.png)
 
-> Replace `docs/images/tool_workflow.png` with the path to your exported screenshot of the TikZ figure if needed.
-
 ---
 
 ## Main Features
