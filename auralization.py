@@ -660,7 +660,14 @@ def _synthesize_moving_audio_source(
 
     output_length = len(source_signal) + max_delay_samples + fft_block_size + 2
     output = np.zeros(output_length, dtype=float)
-    weight = np.zeros(output_length, dtype=float)
+
+    # Overlap-add normalization for the synthesis window.
+    # Important: this must correct only the Hann overlap, not average the
+    # physical direct/reflected propagation paths. The old implementation
+    # used window**2 and added it once per propagation path, which can create
+    # very large edge spikes after division by tiny Hann values. Those spikes
+    # then dominate peak normalization and make the rest of the WAV sound silent.
+    ola_norm = np.zeros(output_length, dtype=float)
 
     sample_freqs_for_prop = np.array([1000.0], dtype=float)
 
@@ -714,7 +721,7 @@ def _synthesize_moving_audio_source(
         direct_block = direct_block * (conv_amp * direct_amp) * window
 
         output[start_out:end_out] += direct_block
-        weight[start_out:end_out] += window ** 2
+        ola_norm[start_out:end_out] += window
 
         if reflected_delay_s is not None and reflected_amp is not None and reflected_amp > 0.0:
             reflected_emission_center = t_obs - reflected_delay_s
@@ -729,11 +736,22 @@ def _synthesize_moving_audio_source(
             reflected_block = reflected_block * (conv_amp * reflected_amp) * window
 
             output[start_out:end_out] += reflected_block
-            weight[start_out:end_out] += window ** 2
+            # Do not add to ola_norm again here. The reflected contribution is a
+            # real acoustic path and should be summed, not averaged away.
 
-    valid = weight > 1e-12
-    output[valid] /= weight[valid]
+    valid = ola_norm > 1e-6
+    output[valid] /= ola_norm[valid]
     output[~valid] = 0.0
+
+    # Remove possible numerical outliers caused by very low overlap support at
+    # the start/end of the signal. This keeps the GUI export/listening robust.
+    finite = np.isfinite(output)
+    if not np.all(finite):
+        output[~finite] = 0.0
+    if np.any(output):
+        limit = 10.0 * np.percentile(np.abs(output), 99.9)
+        if np.isfinite(limit) and limit > 0.0:
+            output = np.clip(output, -limit, limit)
 
     return output
 
@@ -977,14 +995,15 @@ def auralize_audio_file_with_trajectory(
         propagation_settings=propagation_settings,
     )
 
-    global_scale = max(
-        np.max(np.abs(y)),
-        np.max(np.abs(propagated_raw)),
-        1e-12,
+    # Normalize original and trajectory outputs independently for GUI listening.
+    # This avoids a physically attenuated trajectory signal being exported as
+    # an almost silent 16-bit WAV. Absolute level calibration can be added later
+    # as a separate export mode if needed.
+    original_signal = _normalize_signal(y, max(np.max(np.abs(y)), 1e-12))
+    propagated_signal = _normalize_signal(
+        propagated_raw,
+        max(np.max(np.abs(propagated_raw)), 1e-12),
     )
-
-    original_signal = _normalize_signal(y, global_scale)
-    propagated_signal = _normalize_signal(propagated_raw, global_scale)
 
     os.makedirs(output_dir, exist_ok=True)
     original_wav = os.path.join(output_dir, "audio_original.wav")
