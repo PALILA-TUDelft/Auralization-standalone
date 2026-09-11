@@ -75,6 +75,45 @@ def compute_convective_amplification(source_pos, observer_pos, source_vel, c=343
     return amplification
 
 
+
+
+def resolve_fft_and_hop_sizes(fft_block_size=None, hop_size=None):
+    """
+    Resolve the STFT/moving-audio block size and hop size.
+
+    The GUI may let the user enter either:
+    - fft_block_size / STFT window length, or
+    - hop_size / frame step.
+
+    If only one value is supplied, the other is inferred using the current
+    design choice of 75% overlap:
+        hop_size = fft_block_size / 4
+        fft_block_size = hop_size * 4
+    """
+    if fft_block_size is None and hop_size is None:
+        fft_block_size = 2048
+        hop_size = 512
+    elif fft_block_size is None:
+        hop_size = int(hop_size)
+        if hop_size <= 0:
+            raise ValueError("Hop size must be a positive integer.")
+        fft_block_size = int(hop_size) * 4
+    elif hop_size is None:
+        fft_block_size = int(fft_block_size)
+        if fft_block_size <= 0:
+            raise ValueError("FFT/STFT block size must be a positive integer.")
+        hop_size = max(1, int(round(fft_block_size / 4)))
+    else:
+        fft_block_size = int(fft_block_size)
+        hop_size = int(hop_size)
+        if fft_block_size <= 0 or hop_size <= 0:
+            raise ValueError("FFT/STFT block size and hop size must be positive integers.")
+        if hop_size > fft_block_size:
+            raise ValueError("Hop size should not be larger than the FFT/STFT block size.")
+
+    return int(fft_block_size), int(hop_size)
+
+
 def _power_sum_db(db_a, db_b):
     pa = 10.0 ** (db_a / 10.0)
     pb = 10.0 ** (db_b / 10.0)
@@ -506,6 +545,7 @@ def _synthesize_signal_from_spl(
     observer_positions,
     source_velocities,
     observer_velocities,
+    hop_size=None,
     apply_doppler=True,
     apply_propagation=False,
     propagation_settings=None,
@@ -520,7 +560,7 @@ def _synthesize_signal_from_spl(
     - atmospheric absorption
     - optional flat-ground reflection
     """
-    hop_size = fft_block_size // 4
+    fft_block_size, hop_size = resolve_fft_and_hop_sizes(fft_block_size, hop_size)
     n_blocks = spl_db.shape[1]
 
     max_delay_s = _estimate_max_delay_seconds(
@@ -635,6 +675,7 @@ def _synthesize_moving_audio_source(
     source_velocities,
     observer_velocities,
     fft_block_size=2048,
+    hop_size=None,
     apply_doppler=True,
     apply_propagation=False,
     propagation_settings=None,
@@ -643,7 +684,7 @@ def _synthesize_moving_audio_source(
     Treat an existing time-domain audio file as the emitted source signal and
     auralize it along a moving trajectory.
     """
-    hop_size = fft_block_size // 4
+    fft_block_size, hop_size = resolve_fft_and_hop_sizes(fft_block_size, hop_size)
     window = hann(fft_block_size, sym=False)
     local_t = (np.arange(fft_block_size) - fft_block_size / 2) / float(fs)
 
@@ -764,6 +805,7 @@ def auralize_from_csv(
     position_csv_path=None,
     fs=44100,
     fft_block_size=2048,
+    hop_size=None,
     apply_doppler=True,
     apply_propagation=False,
     propagation_settings=None,
@@ -772,6 +814,7 @@ def auralize_from_csv(
     """
     Combined spectrogram input mode.
     """
+    fft_block_size, hop_size = resolve_fft_and_hop_sizes(fft_block_size, hop_size)
     freqs, times, spl_db = load_spectrogram_csv(csv_path)
 
     (
@@ -787,6 +830,7 @@ def auralize_from_csv(
         spl_db=spl_db,
         fs=fs,
         fft_block_size=fft_block_size,
+        hop_size=hop_size,
         source_positions=source_positions,
         observer_positions=observer_positions,
         source_velocities=source_velocities,
@@ -820,6 +864,8 @@ def auralize_from_csv(
         "apply_propagation": apply_propagation,
         "propagation": propagation_summary,
         "duration_seconds": len(signal) / fs,
+        "fft_block_size": fft_block_size,
+        "hop_size": hop_size,
     }
 
     return signal, fs, output_wav_path, result
@@ -831,6 +877,7 @@ def auralize_from_separate_csv(
     position_csv_path=None,
     fs=44100,
     fft_block_size=2048,
+    hop_size=None,
     apply_doppler=True,
     apply_propagation=False,
     propagation_settings=None,
@@ -839,6 +886,7 @@ def auralize_from_separate_csv(
     """
     Separate broadband + tonal input mode.
     """
+    fft_block_size, hop_size = resolve_fft_and_hop_sizes(fft_block_size, hop_size)
     bb_freqs, bb_times, broadband_db = load_spectrogram_csv(broadband_csv_path)
     tn_freqs, tn_times, tonal_db = load_spectrogram_csv(tonal_csv_path)
 
@@ -865,6 +913,7 @@ def auralize_from_separate_csv(
         spl_db=broadband_db,
         fs=fs,
         fft_block_size=fft_block_size,
+        hop_size=hop_size,
         source_positions=source_positions,
         observer_positions=observer_positions,
         source_velocities=source_velocities,
@@ -881,6 +930,7 @@ def auralize_from_separate_csv(
         spl_db=tonal_db,
         fs=fs,
         fft_block_size=fft_block_size,
+        hop_size=hop_size,
         source_positions=source_positions,
         observer_positions=observer_positions,
         source_velocities=source_velocities,
@@ -946,6 +996,8 @@ def auralize_from_separate_csv(
         "apply_propagation": apply_propagation,
         "propagation": propagation_summary,
         "duration_seconds": len(combined_signal) / fs,
+        "fft_block_size": fft_block_size,
+        "hop_size": hop_size,
     }
 
     return signals, fs, wav_paths, result
@@ -956,6 +1008,7 @@ def auralize_audio_file_with_trajectory(
     position_csv_path=None,
     analysis_fs=None,
     fft_block_size=2048,
+    hop_size=None,
     apply_doppler=True,
     apply_propagation=False,
     propagation_settings=None,
@@ -965,11 +1018,8 @@ def auralize_audio_file_with_trajectory(
     Use an existing WAV/MP3 as the emitted source signal and play it through
     a moving source/observer trajectory.
     """
+    fft_block_size, hop_size = resolve_fft_and_hop_sizes(fft_block_size, hop_size)
     y, sr = _load_audio_mono(audio_path, sr=analysis_fs)
-
-    hop_size = fft_block_size // 4
-    if hop_size <= 0:
-        raise ValueError("FFT block size must be positive and large enough.")
 
     n_blocks = max(1, int(np.ceil(max(len(y) - fft_block_size, 0) / hop_size)) + 1)
     block_times = (np.arange(n_blocks) * hop_size + fft_block_size / 2) / float(sr)
@@ -990,6 +1040,7 @@ def auralize_audio_file_with_trajectory(
         source_velocities=source_velocities,
         observer_velocities=observer_velocities,
         fft_block_size=fft_block_size,
+        hop_size=hop_size,
         apply_doppler=apply_doppler,
         apply_propagation=apply_propagation,
         propagation_settings=propagation_settings,
@@ -1041,6 +1092,7 @@ def auralize_audio_file_with_trajectory(
         "duration_seconds": len(propagated_signal) / float(sr),
         "analysis_fs": sr,
         "fft_block_size": fft_block_size,
+        "hop_size": hop_size,
     }
 
     return signals, sr, wav_paths, result
@@ -1061,6 +1113,7 @@ def analyze_audio_input(
     audio_path,
     analysis_fs=None,
     fft_block_size=2048,
+    hop_size=None,
     griffinlim_iterations=32,
     output_dir=".",
 ):
@@ -1069,15 +1122,12 @@ def analyze_audio_input(
     """
     librosa = _require_librosa()
 
-    if fft_block_size <= 0:
-        raise ValueError("FFT block size must be positive.")
+    fft_block_size, hop_size = resolve_fft_and_hop_sizes(fft_block_size, hop_size)
 
     if griffinlim_iterations <= 0:
         raise ValueError("Griffin-Lim iterations must be positive.")
 
-    hop_length = fft_block_size // 4
-    if hop_length <= 0:
-        raise ValueError("FFT block size is too small.")
+    hop_length = hop_size
 
     y, sr = librosa.load(audio_path, sr=analysis_fs, mono=True)
 
@@ -1179,6 +1229,7 @@ def analyze_audio_input(
         "duration_seconds": len(original_signal) / float(sr),
         "analysis_fs": sr,
         "fft_block_size": fft_block_size,
+        "hop_size": hop_size,
         "griffinlim_iterations": griffinlim_iterations,
     }
 

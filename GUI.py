@@ -147,6 +147,71 @@ def _safe_get_audio_fs_value(fs_var):
     return int(fs_text)
 
 
+
+
+def _parse_fft_hop_entries(fft_entry, hop_entry):
+    """Read linked FFT/window-size and hop-size entries."""
+    fft_size = int(fft_entry.get().strip())
+    hop_size = int(hop_entry.get().strip())
+    if fft_size <= 0 or hop_size <= 0:
+        raise ValueError("FFT/window size and hop size must be positive.")
+    if hop_size > fft_size:
+        raise ValueError("Hop size cannot be larger than FFT/window size.")
+    return fft_size, hop_size
+
+
+def _make_linked_fft_hop_entries(parent, default_fft=2048):
+    """Create two entries that stay linked by the 75% overlap rule: hop = FFT/4."""
+    updating = {"active": False}
+
+    ctk.CTkLabel(parent, text="STFT window / FFT size [samples]").pack(anchor="w", padx=16, pady=(12, 4))
+    fft_entry = ctk.CTkEntry(parent, width=320)
+    fft_entry.insert(0, str(default_fft))
+    fft_entry.pack(padx=16)
+
+    ctk.CTkLabel(parent, text="Hop size [samples] = FFT size / 4").pack(anchor="w", padx=16, pady=(8, 4))
+    hop_entry = ctk.CTkEntry(parent, width=320)
+    hop_entry.insert(0, str(max(1, int(round(default_fft / 4)))))
+    hop_entry.pack(padx=16)
+
+    def set_entry(entry, value):
+        entry.delete(0, "end")
+        entry.insert(0, str(value))
+
+    def update_from_fft(event=None):
+        if updating["active"]:
+            return
+        try:
+            value = int(fft_entry.get().strip())
+            if value > 0:
+                updating["active"] = True
+                set_entry(hop_entry, max(1, int(round(value / 4))))
+        except ValueError:
+            pass
+        finally:
+            updating["active"] = False
+
+    def update_from_hop(event=None):
+        if updating["active"]:
+            return
+        try:
+            value = int(hop_entry.get().strip())
+            if value > 0:
+                updating["active"] = True
+                set_entry(fft_entry, int(value * 4))
+        except ValueError:
+            pass
+        finally:
+            updating["active"] = False
+
+    fft_entry.bind("<KeyRelease>", update_from_fft)
+    fft_entry.bind("<FocusOut>", update_from_fft)
+    hop_entry.bind("<KeyRelease>", update_from_hop)
+    hop_entry.bind("<FocusOut>", update_from_hop)
+
+    return fft_entry, hop_entry
+
+
 def generate_sample_positions_for_entry(entry_widget, duration_seconds, scenario_name):
     if duration_seconds <= 0.0:
         update_message("Could not determine a valid duration for the sample trajectory.", "red")
@@ -729,6 +794,7 @@ def run_combined_auralization(
     pos_entry,
     fs_var,
     fft_entry,
+    hop_entry,
     doppler_var,
     propagation_var,
     dashboard_parent,
@@ -752,9 +818,9 @@ def run_combined_auralization(
 
     try:
         fs = int(fs_var.get())
-        fft_size = int(fft_entry.get())
+        fft_size, hop_size = _parse_fft_hop_entries(fft_entry, hop_entry)
     except ValueError:
-        update_message("Sampling rate and FFT block size must be integers.", "red")
+        update_message("Sampling rate, FFT/window size, and hop size must be valid integers.", "red")
         return
 
     apply_doppler = doppler_var.get()
@@ -769,6 +835,7 @@ def run_combined_auralization(
                 position_csv_path=pos_path if pos_path else None,
                 fs=fs,
                 fft_block_size=fft_size,
+                hop_size=hop_size,
                 apply_doppler=apply_doppler,
                 apply_propagation=propagation_var.get(),
                 propagation_settings=None,
@@ -804,6 +871,7 @@ def run_separate_auralization(
     pos_entry,
     fs_var,
     fft_entry,
+    hop_entry,
     doppler_var,
     propagation_var,
     dashboard_parent,
@@ -832,9 +900,9 @@ def run_separate_auralization(
 
     try:
         fs = int(fs_var.get())
-        fft_size = int(fft_entry.get())
+        fft_size, hop_size = _parse_fft_hop_entries(fft_entry, hop_entry)
     except ValueError:
-        update_message("Sampling rate and FFT block size must be integers.", "red")
+        update_message("Sampling rate, FFT/window size, and hop size must be valid integers.", "red")
         return
 
     apply_doppler = doppler_var.get()
@@ -850,6 +918,7 @@ def run_separate_auralization(
                 position_csv_path=pos_path if pos_path else None,
                 fs=fs,
                 fft_block_size=fft_size,
+                hop_size=hop_size,
                 apply_doppler=apply_doppler,
                 apply_propagation=propagation_var.get(),
                 propagation_settings=None,
@@ -885,6 +954,7 @@ def run_audio_analysis(
     audio_entry,
     fs_var,
     fft_entry,
+    hop_entry,
     griffinlim_entry,
     dashboard_parent,
 ):
@@ -900,10 +970,10 @@ def run_audio_analysis(
         return
 
     try:
-        fft_size = int(fft_entry.get())
+        fft_size, hop_size = _parse_fft_hop_entries(fft_entry, hop_entry)
         griffinlim_iterations = int(griffinlim_entry.get())
     except ValueError:
-        update_message("FFT block size and Griffin-Lim iterations must be integers.", "red")
+        update_message("FFT/window size, hop size, and Griffin-Lim iterations must be valid integers.", "red")
         return
 
     try:
@@ -922,6 +992,7 @@ def run_audio_analysis(
                 audio_path=audio_path,
                 analysis_fs=analysis_fs,
                 fft_block_size=fft_size,
+                hop_size=hop_size,
                 griffinlim_iterations=griffinlim_iterations,
                 output_dir=".",
             )
@@ -954,6 +1025,7 @@ def run_audio_trajectory_auralization(
     pos_entry,
     fs_var,
     fft_entry,
+    hop_entry,
     doppler_var,
     propagation_var,
     dashboard_parent,
@@ -976,10 +1048,10 @@ def run_audio_trajectory_auralization(
         return
 
     try:
-        fft_size = int(fft_entry.get())
+        fft_size, hop_size = _parse_fft_hop_entries(fft_entry, hop_entry)
         analysis_fs = _safe_get_audio_fs_value(fs_var)
     except ValueError:
-        update_message("Invalid sampling rate or FFT block size.", "red")
+        update_message("Invalid sampling rate, FFT/window size, or hop size.", "red")
         return
 
     is_processing = True
@@ -993,6 +1065,7 @@ def run_audio_trajectory_auralization(
                 position_csv_path=pos_path if pos_path else None,
                 analysis_fs=analysis_fs,
                 fft_block_size=fft_size,
+                hop_size=hop_size,
                 apply_doppler=doppler_var.get(),
                 apply_propagation=propagation_var.get(),
                 propagation_settings=None,
@@ -1218,10 +1291,7 @@ def show_audio_input_screen():
     )
     audio_fs_menu.pack(padx=16)
 
-    ctk.CTkLabel(left_panel, text="FFT Block Size").pack(anchor="w", padx=16, pady=(12, 4))
-    audio_fft_entry = ctk.CTkEntry(left_panel, width=320)
-    audio_fft_entry.insert(0, "2048")
-    audio_fft_entry.pack(padx=16)
+    audio_fft_entry, audio_hop_entry = _make_linked_fft_hop_entries(left_panel, default_fft=2048)
 
     ctk.CTkLabel(left_panel, text="Griffin-Lim Iterations").pack(anchor="w", padx=16, pady=(12, 4))
     griffinlim_entry = ctk.CTkEntry(left_panel, width=320)
@@ -1291,7 +1361,7 @@ def show_audio_input_screen():
         fg_color="#d48a00",
         hover_color="#b57600",
         command=lambda: run_audio_analysis(
-            audio_entry, audio_fs_var, audio_fft_entry, griffinlim_entry, dashboard_frame
+            audio_entry, audio_fs_var, audio_fft_entry, audio_hop_entry, griffinlim_entry, dashboard_frame
         ),
     ).pack(padx=16, pady=(4, 12))
 
@@ -1308,7 +1378,7 @@ def show_audio_input_screen():
         fg_color="#d48a00",
         hover_color="#b57600",
         command=lambda: run_audio_trajectory_auralization(
-            audio_entry, pos_entry, audio_fs_var, audio_fft_entry, doppler_var, propagation_var, dashboard_frame
+            audio_entry, pos_entry, audio_fs_var, audio_fft_entry, audio_hop_entry, doppler_var, propagation_var, dashboard_frame
         ),
     ).pack(padx=16, pady=(4, 12))
 
@@ -1481,10 +1551,7 @@ def show_combined_input_screen():
     )
     fs_menu.pack(padx=16)
 
-    ctk.CTkLabel(left_panel, text="FFT Block Size").pack(anchor="w", padx=16, pady=(12, 4))
-    fft_entry = ctk.CTkEntry(left_panel, width=320)
-    fft_entry.insert(0, "2048")
-    fft_entry.pack(padx=16)
+    fft_entry, hop_entry = _make_linked_fft_hop_entries(left_panel, default_fft=2048)
 
     doppler_var = ctk.BooleanVar(value=True)
     ctk.CTkCheckBox(
@@ -1507,7 +1574,7 @@ def show_combined_input_screen():
         fg_color="#d48a00",
         hover_color="#b57600",
         command=lambda: run_combined_auralization(
-            spec_entry, pos_entry, fs_var, fft_entry, doppler_var, propagation_var, dashboard_frame
+            spec_entry, pos_entry, fs_var, fft_entry, hop_entry, doppler_var, propagation_var, dashboard_frame
         ),
     ).pack(padx=16, pady=(8, 8))
 
@@ -1659,10 +1726,7 @@ def show_separate_input_screen():
     )
     fs_menu.pack(padx=16)
 
-    ctk.CTkLabel(left_panel, text="FFT Block Size").pack(anchor="w", padx=16, pady=(12, 4))
-    fft_entry = ctk.CTkEntry(left_panel, width=320)
-    fft_entry.insert(0, "2048")
-    fft_entry.pack(padx=16)
+    fft_entry, hop_entry = _make_linked_fft_hop_entries(left_panel, default_fft=2048)
 
     doppler_var = ctk.BooleanVar(value=True)
     ctk.CTkCheckBox(
@@ -1685,7 +1749,7 @@ def show_separate_input_screen():
         fg_color="#d48a00",
         hover_color="#b57600",
         command=lambda: run_separate_auralization(
-            broadband_entry, tonal_entry, pos_entry, fs_var, fft_entry, doppler_var, propagation_var, dashboard_frame
+            broadband_entry, tonal_entry, pos_entry, fs_var, fft_entry, hop_entry, doppler_var, propagation_var, dashboard_frame
         ),
     ).pack(padx=16, pady=(8, 8))
 
